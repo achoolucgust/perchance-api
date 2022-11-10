@@ -1,59 +1,77 @@
-const express = require("express");
-const app = express();
-const port = process.env.PORT || 3001;
+(async function() { 
 
-app.get("/", (req, res) => res.type('html').send(html));
+  const fetch = require("node-fetch");
+  const jsdom = require("jsdom");
+  const { JSDOM } = jsdom;
+  const express = require("express"); 
+  const app = express();
 
-app.listen(port, () => console.log(`Example app listening on port ${port}!`));
+  let testingOnlyWarning = `<br><div><span style="color:red; font-weight:bold;">IMPORTANT:</span> This API server is <u>only for testing</u>. It is purposely handicapped to only output up to 10 results per generator, per day (except for the animal-sentence generator). Please follow the instructions <a href="https://perchance.org/diy-perchance-api" target="_blank">here</a> to set up your own server (it's free!), and you'll be able to generate as many results from as many generators as you like :)</div>`;
+  app.get("/", (request, response) => {
+    response.send(`
+      <div style="font-family: monospace; line-height: 1.4rem;">
+        <div>Use <span style="background: #e5e5e5;padding: 0.25rem;"><a style="text-decoration:none; color:inherit;" href="https://${process.env.PROJECT_DOMAIN}.glitch.me/api?generator=animal-sentence&list=output">https://${process.env.PROJECT_DOMAIN}.glitch.me/api?generator=<span style="background:#ffd04a;">animal-sentence</span>&amp;list=<span style="background:#ffd04a;">output</span></a></span> to generate some text. Loading a new generator for the first time will take several seconds, but after that it will be cached and you should be able to generate results quickly.</div>
+        ${process.env.PROJECT_DOMAIN === "diy-perchance-api" ? testingOnlyWarning : ""}
+      </div>
+    `);
+  });
+  
+  
+  let generatorWindows = {};
+  let lastGeneratorUseTimes = {};
+  let maxNumberOfGeneratorsCached = 50;
+  
+  async function makeGeneratorWindow(generatorName) {
+    let html = await fetch(`https://perchance.org/api/downloadGenerator?generatorName=${generatorName}&__cacheBust=${Math.random()}`).then(r => r.text());
+    const { window } = new JSDOM(html, {runScripts: "dangerously"});
+    return window;
+  }
+  
+  // Testing limits are only enabled if the project name is "diy-perchance-api"
+  let testingLimitCount = 10;
+  let perGeneratorTestingLimits = {};
+  setInterval(() => {
+    perGeneratorTestingLimits = {};
+  }, 1000*60*60*24);
+  
+  // reboot the testing server every 30 minutes (in case a generator has an infinite loop or something):
+  if(process.env.PROJECT_DOMAIN === "diy-perchance-api") {
+    setTimeout(() => {
+      process.exit(0);
+    }, 1000*60*30); 
+  }
 
-
-const html = `
-<!DOCTYPE html>
-<html>
-  <head>
-    <title>Hello from Render!</title>
-    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.5.1/dist/confetti.browser.min.js"></script>
-    <script>
-      setTimeout(() => {
-        confetti({
-          particleCount: 100,
-          spread: 70,
-          origin: { y: 0.6 },
-          disableForReducedMotion: true
-        });
-      }, 500);
-    </script>
-    <style>
-      @import url("https://p.typekit.net/p.css?s=1&k=vnd5zic&ht=tk&f=39475.39476.39477.39478.39479.39480.39481.39482&a=18673890&app=typekit&e=css");
-      @font-face {
-        font-family: "neo-sans";
-        src: url("https://use.typekit.net/af/00ac0a/00000000000000003b9b2033/27/l?primer=7cdcb44be4a7db8877ffa5c0007b8dd865b3bbc383831fe2ea177f62257a9191&fvd=n7&v=3") format("woff2"), url("https://use.typekit.net/af/00ac0a/00000000000000003b9b2033/27/d?primer=7cdcb44be4a7db8877ffa5c0007b8dd865b3bbc383831fe2ea177f62257a9191&fvd=n7&v=3") format("woff"), url("https://use.typekit.net/af/00ac0a/00000000000000003b9b2033/27/a?primer=7cdcb44be4a7db8877ffa5c0007b8dd865b3bbc383831fe2ea177f62257a9191&fvd=n7&v=3") format("opentype");
-        font-style: normal;
-        font-weight: 700;
+  app.get("/api", async (request, response) => {
+    let generatorName = request.query.generator;
+    let listName = request.query.list;
+    
+    if(generatorName !== "animal-sentence" && process.env.PROJECT_DOMAIN === "diy-perchance-api") {
+      perGeneratorTestingLimits[generatorName] = (perGeneratorTestingLimits[generatorName] || 0) + 1;
+      if(perGeneratorTestingLimits[generatorName] > testingLimitCount) {
+        console.log(`Served apology in response to ?generator=${generatorName}&list=${listName} because the daily testing limit for ${generatorName} has been reached.`);
+        return response.send(`Sorry! The daily testing limit has been reached for the <i>${generatorName}</i> generator. As explained at <a href="https://diy-perchance-api.glitch.me">diy-perchance-api.glitch.me</a>, this server is set up for testing only. You can create your own server for free using Glitch as explained <a href="https://perchance.org/diy-perchance-api" target="_blank">here</a>, and that will allow you to make unlimited requests.`);
       }
-      html {
-        font-family: neo-sans;
-        font-weight: 700;
-        font-size: calc(62rem / 16);
+    }
+    
+    // load and cache generator if we don't have it cached, and trim least-recently-used generator if the cache is too big
+    if(!generatorWindows[generatorName]) {
+      generatorWindows[generatorName] = await makeGeneratorWindow(generatorName);
+      lastGeneratorUseTimes[generatorName] = Date.now(); // <-- need this here so this generator doesn't get trimmed by the code below
+      if(Object.keys(generatorWindows).length > maxNumberOfGeneratorsCached) {
+        let mostStaleGeneratorName = Object.entries(lastGeneratorUseTimes).sort((a,b) => a[1]-b[1])[0];
+        delete generatorWindows[generatorName];
+        delete lastGeneratorUseTimes[generatorName];
       }
-      body {
-        background: white;
-      }
-      section {
-        border-radius: 1em;
-        padding: 1em;
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        margin-right: -50%;
-        transform: translate(-50%, -50%);
-      }
-    </style>
-  </head>
-  <body>
-    <section>
-      Hello from Render!
-    </section>
-  </body>
-</html>
-`
+    }
+    lastGeneratorUseTimes[generatorName] = Date.now();
+    
+    let result = generatorWindows[generatorName].root[request.query.list].toString();
+    response.send(result);
+    console.log(`Served ${result} in response to ?generator=${generatorName}&list=${listName}`);
+  }); 
+ 
+  const listener = app.listen(process.env.PORT, () => {
+    console.log("Your app is listening on port " + listener.address().port);
+  });
+  
+})();
